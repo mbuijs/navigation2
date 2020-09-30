@@ -168,65 +168,64 @@ DWBPublisher::publishEvaluation(std::shared_ptr<dwb_msgs::msg::LocalPlanEvaluati
 void
 DWBPublisher::publishTrajectories(const dwb_msgs::msg::LocalPlanEvaluation & results)
 {
-  if (marker_pub_->get_subscription_count() < 1) {return;}
+  if (publish_trajectories_ && results.twists.size() > 0 &&
+    marker_pub_->get_subscription_count() > 0)
+  {
 
-  if (!publish_trajectories_) {return;}
-  auto ma = std::make_unique<visualization_msgs::msg::MarkerArray>();
-  visualization_msgs::msg::Marker m;
+    auto ma = std::make_unique<visualization_msgs::msg::MarkerArray>();
+    visualization_msgs::msg::Marker m;
+    geometry_msgs::msg::Point pt;
 
-  if (results.twists.size() == 0) {return;}
+    m.header = results.header;
+    m.type = m.LINE_STRIP;
+    m.pose.orientation.w = 1;
+    m.scale.x = 0.002;
+    m.color.a = 1.0;
+    m.lifetime = marker_lifetime_;
 
-  geometry_msgs::msg::Point pt;
+    double best_cost = results.twists[results.best_index].total;
+    double worst_cost = results.twists[results.worst_index].total;
+    double denominator = worst_cost - best_cost;
 
-  m.header = results.header;
-  m.type = m.LINE_STRIP;
-  m.pose.orientation.w = 1;
-  m.scale.x = 0.002;
-  m.color.a = 1.0;
-  m.lifetime = marker_lifetime_;
-
-  double best_cost = results.twists[results.best_index].total;
-  double worst_cost = results.twists[results.worst_index].total;
-  double denominator = worst_cost - best_cost;
-
-  if (std::fabs(denominator) < 1e-9) {
-    denominator = 1.0;
-  }
-
-  unsigned currentValidId = 0;
-  unsigned currentInvalidId = 0;
-  string validNamespace("ValidTrajectories");
-  string invalidNamespace("InvalidTrajectories");
-  for (unsigned int i = 0; i < results.twists.size(); i++) {
-    const dwb_msgs::msg::TrajectoryScore & twist = results.twists[i];
-    double displayLevel = (twist.total - best_cost) / denominator;
-    if (twist.total >= 0) {
-      m.color.r = displayLevel;
-      m.color.g = 1.0 - displayLevel;
-      m.color.b = 0;
-      m.color.a = 1.0;
-      m.ns = validNamespace;
-      m.id = currentValidId;
-      ++currentValidId;
-    } else {
-      m.color.r = 0;
-      m.color.g = 0;
-      m.color.b = 0;
-      m.color.a = 1.0;
-      m.ns = invalidNamespace;
-      m.id = currentInvalidId;
-      ++currentInvalidId;
+    if (std::fabs(denominator) < 1e-9) {
+      denominator = 1.0;
     }
-    m.points.clear();
-    for (unsigned int j = 0; j < twist.traj.poses.size(); ++j) {
-      pt.x = twist.traj.poses[j].x;
-      pt.y = twist.traj.poses[j].y;
-      pt.z = 0;
-      m.points.push_back(pt);
+
+    unsigned currentValidId = 0;
+    unsigned currentInvalidId = 0;
+    string validNamespace("ValidTrajectories");
+    string invalidNamespace("InvalidTrajectories");
+    for (unsigned int i = 0; i < results.twists.size(); i++) {
+      const dwb_msgs::msg::TrajectoryScore & twist = results.twists[i];
+      double displayLevel = (twist.total - best_cost) / denominator;
+      if (twist.total >= 0) {
+        m.color.r = displayLevel;
+        m.color.g = 1.0 - displayLevel;
+        m.color.b = 0;
+        m.color.a = 1.0;
+        m.ns = validNamespace;
+        m.id = currentValidId;
+        ++currentValidId;
+      } else {
+        m.color.r = 0;
+        m.color.g = 0;
+        m.color.b = 0;
+        m.color.a = 1.0;
+        m.ns = invalidNamespace;
+        m.id = currentInvalidId;
+        ++currentInvalidId;
+      }
+      m.points.clear();
+      for (unsigned int j = 0; j < twist.traj.poses.size(); ++j) {
+        pt.x = twist.traj.poses[j].x;
+        pt.y = twist.traj.poses[j].y;
+        pt.z = 0;
+        m.points.push_back(pt);
+      }
+      ma->markers.push_back(m);
     }
-    ma->markers.push_back(m);
+    marker_pub_->publish(std::move(ma));
   }
-  marker_pub_->publish(std::move(ma));
 }
 
 void
@@ -234,15 +233,9 @@ DWBPublisher::publishLocalPlan(
   const std_msgs::msg::Header & header,
   const dwb_msgs::msg::Trajectory2D & traj)
 {
-  if (!publish_local_plan_) {return;}
-
-  auto path =
-    std::make_unique<nav_msgs::msg::Path>(
-    nav_2d_utils::poses2DToPath(
-      traj.poses, header.frame_id,
-      header.stamp));
-
-  if (local_pub_->get_subscription_count() > 0) {
+  if (publish_local_plan_ && local_pub_->get_subscription_count() > 0) {
+    auto path = std::make_unique<nav_msgs::msg::Path>(
+      nav_2d_utils::poses2DToPath(traj.poses, header.frame_id, header.stamp));
     local_pub_->publish(std::move(path));
   }
 }
@@ -252,51 +245,50 @@ DWBPublisher::publishCostGrid(
   const std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap_ros,
   const std::vector<TrajectoryCritic::Ptr> critics)
 {
-  if (cost_grid_pc_pub_->get_subscription_count() < 1) {return;}
+  if (publish_cost_grid_pc_ && cost_grid_pc_pub_->get_subscription_count() > 0) {
 
-  if (!publish_cost_grid_pc_) {return;}
+    auto cost_grid_pc = std::make_unique<sensor_msgs::msg::PointCloud>();
+    cost_grid_pc->header.frame_id = costmap_ros->getGlobalFrameID();
+    cost_grid_pc->header.stamp = clock_->now();
 
-  auto cost_grid_pc = std::make_unique<sensor_msgs::msg::PointCloud>();
-  cost_grid_pc->header.frame_id = costmap_ros->getGlobalFrameID();
-  cost_grid_pc->header.stamp = clock_->now();
-
-  nav2_costmap_2d::Costmap2D * costmap = costmap_ros->getCostmap();
-  double x_coord, y_coord;
-  unsigned int size_x = costmap->getSizeInCellsX();
-  unsigned int size_y = costmap->getSizeInCellsY();
-  cost_grid_pc->points.resize(size_x * size_y);
-  unsigned int i = 0;
-  for (unsigned int cy = 0; cy < size_y; cy++) {
-    for (unsigned int cx = 0; cx < size_x; cx++) {
-      costmap->mapToWorld(cx, cy, x_coord, y_coord);
-      cost_grid_pc->points[i].x = x_coord;
-      cost_grid_pc->points[i].y = y_coord;
-      i++;
+    nav2_costmap_2d::Costmap2D * costmap = costmap_ros->getCostmap();
+    double x_coord, y_coord;
+    unsigned int size_x = costmap->getSizeInCellsX();
+    unsigned int size_y = costmap->getSizeInCellsY();
+    cost_grid_pc->points.resize(size_x * size_y);
+    unsigned int i = 0;
+    for (unsigned int cy = 0; cy < size_y; cy++) {
+      for (unsigned int cx = 0; cx < size_x; cx++) {
+        costmap->mapToWorld(cx, cy, x_coord, y_coord);
+        cost_grid_pc->points[i].x = x_coord;
+        cost_grid_pc->points[i].y = y_coord;
+        i++;
+      }
     }
+
+    sensor_msgs::msg::ChannelFloat32 totals;
+    totals.name = "total_cost";
+    totals.values.resize(size_x * size_y, 0.0);
+
+    for (TrajectoryCritic::Ptr critic : critics) {
+      unsigned int channel_index = cost_grid_pc->channels.size();
+      critic->addCriticVisualization(*cost_grid_pc);
+      if (channel_index == cost_grid_pc->channels.size()) {
+        // No channels were added, so skip to next critic
+        continue;
+      }
+      double scale = critic->getScale();
+      for (i = 0; i < size_x * size_y; i++) {
+        totals.values[i] += cost_grid_pc->channels[channel_index].values[i] * scale;
+      }
+    }
+    cost_grid_pc->channels.push_back(totals);
+
+    // TODO(crdelsey): convert pc to pc2
+    // sensor_msgs::msg::PointCloud2 cost_grid_pc2;
+    // convertPointCloudToPointCloud2(cost_grid_pc, cost_grid_pc2);
+    cost_grid_pc_pub_->publish(std::move(cost_grid_pc));
   }
-
-  sensor_msgs::msg::ChannelFloat32 totals;
-  totals.name = "total_cost";
-  totals.values.resize(size_x * size_y, 0.0);
-
-  for (TrajectoryCritic::Ptr critic : critics) {
-    unsigned int channel_index = cost_grid_pc->channels.size();
-    critic->addCriticVisualization(*cost_grid_pc);
-    if (channel_index == cost_grid_pc->channels.size()) {
-      // No channels were added, so skip to next critic
-      continue;
-    }
-    double scale = critic->getScale();
-    for (i = 0; i < size_x * size_y; i++) {
-      totals.values[i] += cost_grid_pc->channels[channel_index].values[i] * scale;
-    }
-  }
-  cost_grid_pc->channels.push_back(totals);
-
-  // TODO(crdelsey): convert pc to pc2
-  // sensor_msgs::msg::PointCloud2 cost_grid_pc2;
-  // convertPointCloudToPointCloud2(cost_grid_pc, cost_grid_pc2);
-  cost_grid_pc_pub_->publish(std::move(cost_grid_pc));
 }
 
 void
@@ -322,10 +314,10 @@ DWBPublisher::publishGenericPlan(
   const nav_2d_msgs::msg::Path2D plan,
   rclcpp::Publisher<nav_msgs::msg::Path> & pub, bool flag)
 {
-  if (pub.get_subscription_count() < 1) {return;}
-  if (!flag) {return;}
-  auto path = std::make_unique<nav_msgs::msg::Path>(nav_2d_utils::pathToPath(plan));
-  pub.publish(std::move(path));
+  if (flag && pub.get_subscription_count() > 0) {
+    auto path = std::make_unique<nav_msgs::msg::Path>(nav_2d_utils::pathToPath(plan));
+    pub.publish(std::move(path));
+  }
 }
 
 }  // namespace dwb_core
