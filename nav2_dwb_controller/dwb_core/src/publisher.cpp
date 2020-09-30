@@ -171,11 +171,7 @@ DWBPublisher::publishTrajectories(const dwb_msgs::msg::LocalPlanEvaluation & res
   if (publish_trajectories_ && results.twists.size() > 0 &&
     marker_pub_->get_subscription_count() > 0)
   {
-
-    auto ma = std::make_unique<visualization_msgs::msg::MarkerArray>();
     visualization_msgs::msg::Marker m;
-    geometry_msgs::msg::Point pt;
-
     m.header = results.header;
     m.type = m.LINE_STRIP;
     m.pose.orientation.w = 1;
@@ -183,8 +179,8 @@ DWBPublisher::publishTrajectories(const dwb_msgs::msg::LocalPlanEvaluation & res
     m.color.a = 1.0;
     m.lifetime = marker_lifetime_;
 
-    double best_cost = results.twists[results.best_index].total;
-    double worst_cost = results.twists[results.worst_index].total;
+    const double best_cost = results.twists[results.best_index].total;
+    const double worst_cost = results.twists[results.worst_index].total;
     double denominator = worst_cost - best_cost;
 
     if (std::fabs(denominator) < 1e-9) {
@@ -193,37 +189,46 @@ DWBPublisher::publishTrajectories(const dwb_msgs::msg::LocalPlanEvaluation & res
 
     unsigned currentValidId = 0;
     unsigned currentInvalidId = 0;
-    string validNamespace("ValidTrajectories");
-    string invalidNamespace("InvalidTrajectories");
-    for (unsigned int i = 0; i < results.twists.size(); i++) {
-      const dwb_msgs::msg::TrajectoryScore & twist = results.twists[i];
-      double displayLevel = (twist.total - best_cost) / denominator;
-      if (twist.total >= 0) {
-        m.color.r = displayLevel;
-        m.color.g = 1.0 - displayLevel;
-        m.color.b = 0;
-        m.color.a = 1.0;
-        m.ns = validNamespace;
-        m.id = currentValidId;
-        ++currentValidId;
-      } else {
-        m.color.r = 0;
-        m.color.g = 0;
-        m.color.b = 0;
-        m.color.a = 1.0;
-        m.ns = invalidNamespace;
-        m.id = currentInvalidId;
-        ++currentInvalidId;
-      }
-      m.points.clear();
-      for (unsigned int j = 0; j < twist.traj.poses.size(); ++j) {
-        pt.x = twist.traj.poses[j].x;
-        pt.y = twist.traj.poses[j].y;
-        pt.z = 0;
-        m.points.push_back(pt);
-      }
-      ma->markers.push_back(m);
-    }
+    const string validNamespace("ValidTrajectories");
+    const string invalidNamespace("InvalidTrajectories");
+
+    auto ma = std::make_unique<visualization_msgs::msg::MarkerArray>();
+    ma->markers.reserve(results.twists.size());
+    std::transform(
+      results.twists.cbegin(), results.twists.cend(), std::back_inserter(ma->markers),
+      [&](const auto & twist) -> const auto & {
+        double displayLevel = (twist.total - best_cost) / denominator;
+        if (twist.total >= 0) {
+          m.color.r = displayLevel;
+          m.color.g = 1.0 - displayLevel;
+          m.color.b = 0;
+          m.color.a = 1.0;
+          m.ns = validNamespace;
+          m.id = currentValidId;
+          ++currentValidId;
+        } else {
+          m.color.r = 0;
+          m.color.g = 0;
+          m.color.b = 0;
+          m.color.a = 1.0;
+          m.ns = invalidNamespace;
+          m.id = currentInvalidId;
+          ++currentInvalidId;
+        }
+
+        m.points.clear();
+        m.points.reserve(twist.traj.poses.size());
+        std::transform(
+          twist.traj.poses.cbegin(), twist.traj.poses.cend(), std::back_inserter(m.points),
+          [](const auto & pose) {
+            geometry_msgs::msg::Point pt;
+            pt.x = pose.x;
+            pt.y = pose.y;
+            pt.z = 0;
+            return pt;
+          });
+        return m;
+      });
     marker_pub_->publish(std::move(ma));
   }
 }
